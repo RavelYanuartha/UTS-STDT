@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # === 1. PRIMARY (MASTER) SERVER ===
+  primary:
+    image: postgres:16
+    container_name: postgres-primary
+    hostname: primary # Nama host agar Standby bisa menemukannya.
+    ports:
+      - "5432:5432"
+    environment:
+      # User dan DB untuk koneksi biasa dan Replikasi
+      POSTGRES_USER: repl_user
+      POSTGRES_PASSWORD: repl_password
+      POSTGRES_DB: repl_db
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - primary_data:/var/lib/postgresql/data
+    command: >
+      # Konfigurasi PostgreSQL untuk REPLIKASI
+      postgres -c 'wal_level=replica' 
+      -c 'hot_standby=on' 
+      -c 'max_wal_senders=10' 
+      -c 'max_replication_slots=10' 
+      -c 'listen_addresses=0.0.0.0'
+
+  # === 2. STANDBY (REPLICA) SERVER ===
+  standby:
+    image: postgres:16
+    container_name: postgres-standby
+    hostname: standby
+    ports:
+      - "5433:5432" # Pindah port agar tidak konflik dengan primary
+    environment:
+      POSTGRES_USER: repl_user
+      POSTGRES_PASSWORD: repl_password
+      POSTGRES_DB: repl_db
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - standby_data:/var/lib/postgresql/data
+    depends_on:
+      - primary # Pastikan Primary sudah berjalan
+    command: >
+      # Skrip Shell untuk inisialisasi Standby
+      sh -c 'sleep 5 && 
+      # a. Ambil base backup dari Primary
+      pg_basebackup -h primary -D /var/lib/postgresql/data/pgdata -U repl_user -v -P -w &&
+      # b. Tambahkan konfigurasi replikasi ke postgresql.conf
+      echo "standby_mode = on" >> /var/lib/postgresql/data/pgdata/postgresql.conf &&
+      echo "primary_conninfo = '\''host=primary port=5432 user=repl_user password=repl_password application_name=walreceiver'\''" >> /var/lib/postgresql/data/pgdata/postgresql.conf &&
+      # c. Jalankan server PostgreSQL sebagai Standby
+      postgres'
+
+volumes:
+  primary_data:
+  standby_data:
